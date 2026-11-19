@@ -1,7 +1,7 @@
 ﻿import Chatbot from "./Chatbot";
 import "./Chatbot.css";
 import { useState, useEffect } from "react";
-import { getMachines, createMachine, getMachineRisks } from "./api";
+import { getMachines, createMachine, getMachineRisks, getMaintenanceRecords } from "./api";
 import {
   LayoutDashboard, Factory, Wrench, CalendarDays,
   Settings, Search, Bell, Plus, Activity,
@@ -12,6 +12,7 @@ import "./App.css";
 
 function App() {
   const [machines, setMachines] = useState([]);
+  const [maintenanceRecords, setMaintenanceRecords] = useState([]);
   const [riskAssessments, setRiskAssessments] = useState([]);
   const [riskError, setRiskError] = useState("");
   const [active, setActive] = useState("Overview");
@@ -25,51 +26,86 @@ function App() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    async function loadMachines() {
-      try {
-        const data = await getMachines();
+    async function loadDashboard() {
+      const results = await Promise.allSettled([
+        getMachines(),
+        getMaintenanceRecords(),
+        getMachineRisks()
+      ]);
 
-        setMachines(data.map(machine => ({
-          ...machine,
-          code: machine.machine_code,
-          health: machine.health ?? null
-        })));
-
-      } catch (err) {
-        setError(err.message);
-      } finally {
-        setLoading(false);
+      if (results[0].status === "fulfilled") {
+        setMachines(results[0].value);
+      } else {
+        setError(results[0].reason.message);
       }
+
+      if (results[1].status === "fulfilled") {
+        setMaintenanceRecords(results[1].value);
+      } else {
+        setError(prev => prev || results[1].reason.message);
+      }
+
+      if (results[2].status === "fulfilled") {
+        setRiskAssessments(
+          results[2].value.risk_assessments || []
+        );
+        setRiskError("");
+      } else {
+        setRiskError(results[2].reason.message);
+      }
+
+      setLoading(false);
     }
 
-    async function loadRisks() {
-      try {
-        const data = await getMachineRisks();
-        setRiskAssessments(data.risk_assessments || []);
-      } catch (err) {
-        setRiskError(err.message);
-      }
-    }
-
-    loadMachines();
-    loadRisks();
+    loadDashboard();
   }, []);
-  const operational = machines.filter(m => m.status === "Operational").length;
-  const maintenance = machines.filter(m => m.status === "Maintenance").length;
-  const warnings = machines.filter(m => m.status === "Warning").length;
+  const operational = machines.filter(
+    m => m.status === "Operational"
+  ).length;
 
-  const healthValues = machines
-    .map(m => m.health)
-    .filter(value => typeof value === "number" && Number.isFinite(value));
+  const maintenance = maintenanceRecords.filter(
+    m => m.status === "In Progress"
+  ).length;
 
-  const averageHealth = healthValues.length
-    ? Math.round(healthValues.reduce((a, b) => a + b, 0) / healthValues.length)
-    : null;
+  const warnings = riskAssessments.filter(
+    r => ["HIGH", "CRITICAL"].includes(r.risk_level)
+  ).length;
 
-  const filtered = machines.filter(m =>
-    `${m.name} ${m.code} ${m.location}`.toLowerCase().includes(search.toLowerCase())
+  const riskMap = new Map(
+    riskAssessments.map(r => [r.machine_id, r])
   );
 
+  const enrichedMachines = machines.map(machine => {
+    const risk = riskMap.get(machine.id);
+
+    return {
+      ...machine,
+      code: machine.machine_code,
+      health:
+        typeof risk?.risk_score === "number"
+          ? Math.max(0, Math.min(100, 100 - risk.risk_score))
+          : null
+    };
+  });
+
+  const healthValues = enrichedMachines
+    .map(m => m.health)
+    .filter(value =>
+      typeof value === "number" && Number.isFinite(value)
+    );
+
+  const averageHealth = healthValues.length
+    ? Math.round(
+        healthValues.reduce((a, b) => a + b, 0) /
+        healthValues.length
+      )
+    : null;
+
+  const filtered = enrichedMachines.filter(m =>
+    `${m.name} ${m.code} ${m.location}`
+      .toLowerCase()
+      .includes(search.toLowerCase())
+  );
   async function addMachine(e) {
     e.preventDefault();
     setError("");
@@ -77,24 +113,37 @@ function App() {
     try {
       await createMachine(form);
 
-      const data = await getMachines();
+      const results = await Promise.allSettled([
+        getMachines(),
+        getMaintenanceRecords(),
+        getMachineRisks()
+      ]);
 
-      setMachines(data.map(machine => ({
-        ...machine,
-        code: machine.machine_code,
-        health: machine.health ?? null
-      })));
-
-      // Refresh risk assessments after registering a machine
-      try {
-        const riskData = await getMachineRisks();
-        setRiskAssessments(riskData.risk_assessments || []);
-        setRiskError("");
-      } catch (riskErr) {
-        setRiskError(riskErr.message);
+      if (results[0].status === "fulfilled") {
+        setMachines(results[0].value);
+      } else {
+        setError(results[0].reason.message);
       }
 
-      setForm({ name: "", machine_code: "", location: "" });
+      if (results[1].status === "fulfilled") {
+        setMaintenanceRecords(results[1].value);
+      }
+
+      if (results[2].status === "fulfilled") {
+        setRiskAssessments(
+          results[2].value.risk_assessments || []
+        );
+        setRiskError("");
+      } else {
+        setRiskError(results[2].reason.message);
+      }
+
+      setForm({
+        name: "",
+        machine_code: "",
+        location: ""
+      });
+
       setShowForm(false);
 
     } catch (err) {
@@ -203,7 +252,7 @@ function App() {
             <div className="stat-card">
               <div className="stat-top"><span>Operational</span><CheckCircle2 size={19}/></div>
               <h2>{operational.toString().padStart(2, "0")}</h2>
-              <div className="stat-foot positive">â— Running normally</div>
+              <div className="stat-foot positive">Ã¢â€”Â Running normally</div>
             </div>
             <div className="stat-card">
               <div className="stat-top"><span>Under Maintenance</span><Wrench size={19}/></div>
@@ -294,7 +343,7 @@ function App() {
               </div>
               <div className="table-wrap">
                 <table>
-                  <thead><tr><th>MACHINE</th><th>LOCATION</th><th>HEALTH</th><th>STATUS</th></tr></thead>
+                  <thead><tr><th>MACHINE</th><th>LOCATION</th><th>EST. HEALTH</th><th>STATUS</th></tr></thead>
                   <tbody>
                     {loading && <tr><td colSpan="4" className="empty-row">Loading machines...</td></tr>}
                     {!loading && filtered.map(m => (
@@ -318,7 +367,7 @@ function App() {
               </div>
               <div className="maintenance-feature">
                 <div className="maintenance-circle"><Gauge size={27}/></div>
-                <div><strong>{averageHealth !== null ? `${averageHealth}%` : "N/A"}</strong><span>Average machine health</span></div>
+                <div><strong>{averageHealth !== null ? `${averageHealth}%` : "N/A"}</strong><span>Average estimated machine health</span></div>
               </div>
               <div className="summary-row"><span><i className="legend-dot green"/>Operational</span><strong>{operational}</strong></div>
               <div className="summary-row"><span><i className="legend-dot orange"/>Maintenance</span><strong>{maintenance}</strong></div>
@@ -327,7 +376,7 @@ function App() {
             </section>
           </div>
 
-          <footer>MAINTENA <span>â€¢</span> INDUSTRIAL MAINTENANCE MANAGEMENT <span>â€¢</span> MVP VERSION 1.0</footer>
+          <footer>MAINTENA <span>Ã¢â‚¬Â¢</span> INDUSTRIAL MAINTENANCE MANAGEMENT <span>Ã¢â‚¬Â¢</span> MVP VERSION 1.0</footer>
         </section>
       </main>
 
@@ -348,6 +397,7 @@ function App() {
 }
 
 export default App;
+
 
 
 
