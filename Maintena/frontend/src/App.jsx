@@ -5,7 +5,7 @@ import { getMachines, createMachine, getMachineRisks } from "./api";
 import {
   LayoutDashboard, Factory, Wrench, CalendarDays,
   Settings, Search, Bell, Plus, Activity,
-  AlertTriangle, CheckCircle2, Clock, Menu,
+  AlertTriangle, CheckCircle2, Clock,
   ChevronDown, ArrowUpRight, Gauge, X
 } from "lucide-react";
 import "./App.css";
@@ -348,6 +348,7 @@ function App() {
 }
 
 export default App;
+
 
 
 
